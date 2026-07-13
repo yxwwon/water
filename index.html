@@ -40,15 +40,17 @@
                 <div class="flex items-start">
                     <div class="flex-shrink-0 text-red-500 text-xl font-bold">⚠️</div>
                     <div class="ml-3">
-                        <h3 class="text-sm font-bold text-red-800">data.csv 연동 오류</h3>
+                        <h3 class="text-sm font-bold text-red-800">차트 렌더링 에러</h3>
                         <div class="mt-2 text-xs text-red-700" id="errorMessage"></div>
                     </div>
                 </div>
             </div>
 
-            <div id="chartContainer" class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 min-h-[400px] flex items-center justify-center">
-                <canvas id="waterQualityChart" class="w-full h-full hidden"></canvas>
-                <p id="emptyMessage" class="text-gray-400 font-medium text-center">왼쪽 필터에서 지점과 항목을 선택하면 추이 그래프가 나타납니다.</p>
+            <div id="chartContainer" class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 min-h-[500px] flex items-center justify-center relative">
+                <div class="w-full h-[450px]">
+                    <canvas id="waterQualityChart" class="hidden"></canvas>
+                </div>
+                <p id="emptyMessage" class="absolute text-gray-400 font-medium text-center">왼쪽 필터에서 지점과 항목을 선택하면 추이 그래프가 나타납니다.</p>
             </div>
             
         </div>
@@ -67,7 +69,8 @@
         const errorBanner = document.getElementById('errorBanner');
         const errorMessage = document.getElementById('errorMessage');
         const emptyMessage = document.getElementById('emptyMessage');
-        const ctx = document.getElementById('waterQualityChart').getContext('2d');
+        const canvas = document.getElementById('waterQualityChart');
+        const ctx = canvas.getContext('2d');
 
         function parseCSV(text) {
             const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -110,7 +113,6 @@
 
         async function loadData() {
             try {
-                // 현재 도메인과 절대 경로 조합을 활용해 404 차단 해제
                 const currentPath = window.location.pathname.endsWith('/') ? window.location.pathname : window.location.pathname + '/';
                 const fileUrl = window.location.origin + currentPath + 'data.csv';
 
@@ -118,7 +120,6 @@
                 if (!response.ok) throw new Error("FILE_NOT_FOUND");
 
                 const arrayBuffer = await response.arrayBuffer();
-                
                 let decoder = new TextDecoder('utf-8');
                 let csvText = decoder.decode(arrayBuffer);
                 
@@ -128,33 +129,22 @@
                 }
 
                 currentCsvData = parseCSV(csvText);
-
                 if (currentCsvData.length === 0) throw new Error("NO_DATA");
 
                 const allKeys = Object.keys(currentCsvData[0]);
                 const stationKey = allKeys.find(k => k.replace(/\s+/g, '').includes('지점명')) || '지점명';
-                const itemKey = allKeys.find(k => k.replace(/\s+/g, '').includes('측정항목')) || '측정항목';
 
                 const stations = [...new Set(currentCsvData.map(item => item[stationKey]))].filter(Boolean).sort();
                 
-                if (stations.length === 0) throw new Error("NO_STATIONS");
-
                 stationSelect.innerHTML = '<option value="">-- 지점명을 선택하세요 --</option>';
                 stations.forEach(station => {
                     const opt = document.createElement('option');
-                    opt.value = station; 
-                    opt.textContent = station;
+                    opt.value = station; opt.textContent = station;
                     stationSelect.appendChild(opt);
                 });
                 errorBanner.classList.add('hidden');
             } catch (err) {
                 stationSelect.innerHTML = '<option value="">로딩 실패</option>';
-                errorBanner.classList.remove('hidden');
-                if (err.message === "FILE_NOT_FOUND") {
-                    errorMessage.innerHTML = "웹 서버가 <strong>data.csv</strong> 파일을 찾을 수 없습니다. 파일 이름이 완전한 소문자이고 index.html 바로 옆에 있는지 확인해 주세요.";
-                } else {
-                    errorMessage.innerHTML = "데이터 연동 실패: CSV 헤더를 분석할 수 없습니다.";
-                }
             }
         }
 
@@ -177,8 +167,7 @@
             itemSelect.innerHTML = '<option value="">-- 측정항목을 선택하세요 --</option>';
             items.forEach(item => {
                 const opt = document.createElement('option');
-                opt.value = item; 
-                opt.textContent = item;
+                opt.value = item; opt.textContent = item;
                 itemSelect.appendChild(opt);
             });
             itemSelect.disabled = false;
@@ -200,18 +189,31 @@
             const chartLabels = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'];
             const chartData = [];
 
+            // 공백 파괴형 월 데이터 매칭 체계
             for (let m = 1; m <= 12; m++) {
                 const targetMatch = `2026년${m}월`;
                 const matchedKey = allKeys.find(k => k.replace(/\s+/g, '') === targetMatch);
-                const val = matchedKey ? dataRow[matchedKey] : undefined;
-                chartData.push((val !== undefined && val !== '') ? parseFloat(val) : null);
+                let val = matchedKey ? dataRow[matchedKey] : undefined;
+                
+                if (val !== undefined && val !== null && val.trim() !== '') {
+                    // 숫자가 비정상적으로 크면 보정 처리를 하거나, 일단 숫자로 강제 파싱합니다.
+                    let parsedNum = parseFloat(val.replace(/,/g, ''));
+                    chartData.push(isNaN(parsedNum) ? null : parsedNum);
+                } else {
+                    chartData.push(null); // 데이터가 없는 달은 빈칸 처리 (선 끊김 방지 옵션 켬)
+                }
             }
 
-            renderChart(`${station} - ${item} 추이`, chartLabels, chartData);
+            // 모든 데이터가 null인지 확인하는 안전장치
+            if (chartData.every(v => v === null)) {
+                alert("선택하신 지점과 항목에는 2026년 데이터가 모두 비어있습니다. 다른 항목을 선택해 보세요!");
+            }
+
+            renderChart(`${station} - ${item} 추이 (2026년)`, chartLabels, chartData);
         });
 
         function renderChart(label, labels, data) {
-            document.getElementById('waterQualityChart').classList.remove('hidden');
+            canvas.classList.remove('hidden');
             emptyMessage.classList.add('hidden');
             if (chartInstance) chartInstance.destroy();
 
@@ -220,22 +222,28 @@
                 data: {
                     labels: labels,
                     datasets: [{
-                        label: label, data: data,
-                        borderColor: '#2563eb', backgroundColor: 'rgba(37, 99, 235, 0.1)',
-                        borderWidth: 2, pointRadius: 4, spanGaps: true
+                        label: label, 
+                        data: data,
+                        borderColor: '#2563eb', 
+                        backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                        borderWidth: 3, 
+                        pointRadius: 5,
+                        pointHoverRadius: 7,
+                        spanGaps: true // 중간에 데이터가 비어있어도 선을 연결해 주는 유용한 옵션
                     }]
                 },
-                options: { responsive: true, maintainAspectRatio: false }
+                options: { 
+                    responsive: true, 
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: false, // 0부터 시작하면 수치 변화가 안 보일 수 있으므로 유연하게 자동 조절
+                            title: { display: true, text: '측정값' }
+                        }
+                    }
+                }
             });
         }
 
         function resetChart() {
-            if (chartInstance) chartInstance.destroy();
-            document.getElementById('waterQualityChart').classList.add('hidden');
-            emptyMessage.classList.remove('hidden');
-        }
-
-        window.addEventListener('DOMContentLoaded', loadData);
-    </script>
-</body>
-</html>
+            if (chartInstance) chart
